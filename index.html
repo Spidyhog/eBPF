@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBPF: The Interactive Deep Dive</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chosen Palette: Calm Harmony -->
+    <!-- Application Structure Plan: The application is structured as a single-page dashboard with a sticky side navigation. This non-linear, thematic design allows users to freely explore interconnected concepts without being forced into a linear reading path. The key sections are: 1) A 'What is eBPF?' introduction with highlight cards. 2) A 'Core Concepts' section that uses an interactive flowchart for the program lifecycle and a comparison chart for cBPF vs. eBPF. 3) A tabbed 'Cloud-Native Pillars' section (Networking, Observability, Security) featuring a central radar chart to visually argue eBPF's superiority in solving the system trilemma. 4) A tabbed 'Case Studies' section for Cilium and Falco with interactive architectural diagrams. 5) A concluding 'Analysis & Future' section. This structure is chosen to break down complex information into digestible, interactive modules, facilitating understanding and comparison over passive consumption. -->
+    <!-- Visualization & Content Choices: 1. Value Prop (Safety, Perf, Prog): Goal: Inform -> Method: 3 HTML/CSS cards -> Interaction: Hover -> Justification: Quick visual summary. 2. eBPF Lifecycle: Goal: Organize/Change -> Method: HTML/CSS flowchart -> Interaction: Click stage to highlight text -> Justification: Connects visual process to detailed explanation. 3. cBPF vs eBPF: Goal: Compare -> Method: Chart.js Bar Chart -> Interaction: Hover for details -> Justification: Direct visual comparison of capabilities. 4. Systems Trilemma: Goal: Compare/Inform -> Method: Chart.js Radar Chart -> Interaction: Hover for tooltips -> Justification: Thematically illustrates how eBPF balances safety, performance, and programmability against alternatives. 5. Cilium/Falco Architectures: Goal: Organize/Relate -> Method: HTML/CSS diagrams -> Interaction: Click component for info popup -> Justification: Makes abstract architectures tangible and explorable. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #F8F4E3;
+            color: #34495E;
+        }
+        .nav-link {
+            transition: all 0.2s ease-in-out;
+            transform-origin: left center;
+        }
+        .nav-link.active {
+            color: #D4A373;
+            transform: scale(1.05);
+            font-weight: 600;
+        }
+        .nav-link:hover {
+            color: #c59461;
+            transform: scale(1.05);
+        }
+        .content-card {
+            background-color: #EFEBE0;
+            border: 1px solid #E0DACE;
+            transition: all 0.3s ease;
+        }
+        .content-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05), 0 4px 6px -2px rgba(0,0,0,0.05);
+        }
+        .tab-button {
+            transition: all 0.2s ease-in-out;
+        }
+        .tab-button.active {
+            background-color: #6B8A9A;
+            color: #FFFFFF;
+            font-weight: 600;
+        }
+        .tab-button:not(.active):hover {
+            background-color: #d8d2c3;
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 400px;
+            }
+        }
+        .lifecycle-stage {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .lifecycle-stage.highlight {
+            background-color: #d4a37333;
+            transform: scale(1.03);
+        }
+        .lifecycle-text.highlight {
+            background-color: #d4a3731a;
+        }
+        .diagram-component {
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .diagram-component:hover {
+            background-color: #6b8a9a20;
+            transform: scale(1.02);
+        }
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+        .modal-backdrop.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .modal-content {
+            transform: scale(0.95);
+            transition: transform 0.3s ease;
+        }
+        .modal-backdrop.visible .modal-content {
+            transform: scale(1);
+        }
+    </style>
+</head>
+<body class="antialiased">
+    <div class="relative min-h-screen md:flex">
+        <!-- Sidebar Navigation -->
+        <aside class="sticky top-0 h-screen bg-[#EFEBE0] text-[#34495E] w-64 p-6 hidden md:block shadow-lg">
+            <h1 class="text-2xl font-bold text-[#6B8A9A] mb-8">eBPF Explorer</h1>
+            <nav id="desktop-nav">
+                <a href="#introduction" class="block py-2.5 px-4 rounded nav-link active">What is eBPF?</a>
+                <a href="#concepts" class="block py-2.5 px-4 rounded nav-link">Core Concepts</a>
+                <a href="#cloud-native" class="block py-2.5 px-4 rounded nav-link">Cloud-Native Pillars</a>
+                <a href="#casestudies" class="block py-2.5 px-4 rounded nav-link">Case Studies</a>
+                <a href="#analysis" class="block py-2.5 px-4 rounded nav-link">Analysis & Future</a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 p-6 sm:p-8 lg:p-10">
+            <!-- Section: Introduction -->
+            <section id="introduction" class="mb-16">
+                <h2 class="text-4xl font-bold mb-4">What is eBPF? The Kernel's New Frontier</h2>
+                <p class="text-lg text-gray-700 max-w-4xl mb-8">This application provides an interactive exploration of eBPF (Extended Berkeley Packet Filter), a revolutionary technology that allows developers to run sandboxed programs directly in the Linux kernel. It fundamentally changes how we approach networking, observability, and security, especially in modern cloud-native environments. Think of it as **JavaScript for the Kernel**: just as JavaScript made static web pages dynamic, eBPF makes the traditionally static kernel programmable, unlocking a new era of infrastructure innovation.</p>
+                <div class="grid md:grid-cols-3 gap-6">
+                    <div class="content-card p-6 rounded-lg">
+                        <h3 class="text-xl font-bold mb-2 text-[#6B8A9A]">🛡️ Safety</h3>
+                        <p>eBPF programs are rigorously checked by a in-kernel Verifier before being loaded. This guarantees they won't crash or corrupt the kernel, making it a vastly safer alternative to kernel modules.</p>
+                    </div>
+                    <div class="content-card p-6 rounded-lg">
+                        <h3 class="text-xl font-bold mb-2 text-[#6B8A9A]">⚡ Performance</h3>
+                        <p>After verification, eBPF bytecode is translated into native machine code by a Just-In-Time (JIT) compiler. This allows programs to run at near-native speed, crucial for high-throughput tasks.</p>
+                    </div>
+                    <div class="content-card p-6 rounded-lg">
+                        <h3 class="text-xl font-bold mb-2 text-[#6B8A9A]">🔧 Programmability</h3>
+                        <p>eBPF makes the kernel programmable at runtime. Developers can attach custom logic to thousands of kernel "hooks" to observe, filter, and act on system events without changing kernel source code.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section: Core Concepts -->
+            <section id="concepts" class="mb-16">
+                <h2 class="text-4xl font-bold mb-4">Core Concepts</h2>
+                <p class="text-lg text-gray-700 max-w-4xl mb-8">To understand eBPF's power, it's essential to grasp its architecture and how it evolved. This section breaks down the journey of an eBPF program from code to execution and contrasts its modern capabilities with its predecessor, cBPF.</p>
+
+                <div class="content-card p-6 rounded-lg mb-8">
+                    <h3 class="text-2xl font-bold mb-4 text-center">The Lifecycle of an eBPF Program</h3>
+                    <p class="text-center text-gray-600 mb-6">Click on any stage below to see a detailed explanation. This interactive diagram shows how your code safely makes its way into the kernel.</p>
+                    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 items-center text-center text-sm font-semibold">
+                        <div id="stage-1" class="lifecycle-stage p-4 rounded-md bg-gray-200">1. Write (in C)</div>
+                        <div class="text-2xl text-gray-400">→</div>
+                        <div id="stage-2" class="lifecycle-stage p-4 rounded-md bg-gray-200">2. Compile (LLVM)</div>
+                        <div class="text-2xl text-gray-400">→</div>
+                        <div id="stage-3" class="lifecycle-stage p-4 rounded-md bg-gray-200">3. Load & Verify</div>
+                        <div class="text-2xl text-gray-400">→</div>
+                        <div id="stage-4" class="lifecycle-stage p-4 rounded-md bg-gray-200">4. JIT & Attach</div>
+                    </div>
+                    <div class="mt-6 space-y-4">
+                        <div id="text-1" class="lifecycle-text p-4 rounded-md transition-all duration-300"><strong>Writing:</strong> Developers write eBPF programs in a restricted subset of C, using libraries like `libbpf` to simplify interactions with the kernel.</div>
+                        <div id="text-2" class="lifecycle-text p-4 rounded-md transition-all duration-300"><strong>Compiling:</strong> The C code is compiled by a toolchain like LLVM/Clang into eBPF bytecode, which is a platform-agnostic instruction set.</div>
+                        <div id="text-3" class="lifecycle-text p-4 rounded-md transition-all duration-300"><strong>Loading & Verification:</strong> A user-space application loads the bytecode into the kernel using the `bpf()` syscall. The Verifier then performs a mandatory static analysis, checking for safety violations like out-of-bounds access or infinite loops. This is the cornerstone of eBPF's safety. If verification fails, the program is rejected.</div>
+                        <div id="text-4" class="lifecycle-text p-4 rounded-md transition-all duration-300"><strong>JIT Compilation & Attaching:</strong> After successful verification, the bytecode is JIT-compiled into native machine code for maximum performance. The loader then attaches this program to a specific kernel hook point (e.g., a network interface or a system call). The program now lies dormant, waiting to be triggered by that event.</div>
+                    </div>
+                </div>
+
+                <div class="content-card p-6 rounded-lg">
+                    <h3 class="text-2xl font-bold mb-4 text-center">The Evolutionary Leap: cBPF vs. eBPF</h3>
+                    <p class="text-center text-gray-600 mb-6">eBPF is a complete rework of its predecessor, classic BPF (cBPF). This chart highlights the dramatic expansion in capabilities that transformed a simple packet filter into a general-purpose in-kernel engine.</p>
+                    <div class="chart-container">
+                        <canvas id="evolutionChart"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section: Cloud-Native Pillars -->
+            <section id="cloud-native" class="mb-16">
+                <h2 class="text-4xl font-bold mb-4">eBPF: The Foundation for Cloud-Native</h2>
+                <p class="text-lg text-gray-700 max-w-4xl mb-8">Cloud-native environments are dynamic, ephemeral, and distributed, posing unique challenges for traditional infrastructure tools. eBPF directly addresses these challenges by making the kernel programmable with high-level, cloud-native context. It resolves the classic trilemma of choosing between Safety, Performance, and Programmability.</p>
+                
+                <div class="content-card p-6 rounded-lg">
+                    <h3 class="text-2xl font-bold mb-4 text-center">Solving the Systems Trilemma</h3>
+                     <p class="text-center text-gray-600 mb-6">This radar chart visually compares eBPF against traditional alternatives. Hover over the labels to see how eBPF uniquely achieves a strong balance across all three critical attributes.</p>
+                    <div class="chart-container h-96 md:h-[450px]">
+                        <canvas id="trilemmaChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="mt-8">
+                    <div class="flex border-b border-gray-300">
+                        <button data-tab="networking" class="tab-button py-2 px-4 -mb-px rounded-t-md active">Networking</button>
+                        <button data-tab="observability" class="tab-button py-2 px-4 -mb-px rounded-t-md">Observability</button>
+                        <button data-tab="security" class="tab-button py-2 px-4 -mb-px rounded-t-md">Security</button>
+                    </div>
+                    <div class="content-card p-6 rounded-lg rounded-tl-none">
+                        <div id="tab-content-networking">
+                            <h4 class="text-xl font-bold mb-2">High-Performance, Identity-Based Networking</h4>
+                            <p><strong>The Challenge:</strong> In Kubernetes, pod IP addresses are ephemeral. Traditional `iptables`-based networking relies on these unstable IPs, leading to massive, slow-to-update rule chains that don't scale.</p>
+                            <p class="mt-2"><strong>The eBPF Solution:</strong> eBPF enables identity-based networking. It associates traffic with stable workload identities (like Kubernetes labels) directly in the kernel. This allows for highly efficient, scalable policy enforcement and service routing that is completely decoupled from the underlying network topology, replacing slow components like `iptables` and `kube-proxy`.</p>
+                        </div>
+                        <div id="tab-content-observability" class="hidden">
+                            <h4 class="text-xl font-bold mb-2">Granular, Low-Overhead Observability</h4>
+                            <p><strong>The Challenge:</strong> Traditional monitoring involves user-space agents (high context-switch overhead), sidecar proxies (added latency), or intrusive code instrumentation.</p>
+                            <p class="mt-2"><strong>The eBPF Solution:</strong> eBPF collects telemetry directly from the kernel, the source of truth, with minimal overhead. It can pre-filter and aggregate data in-kernel, providing deep, granular insights into application and system behavior without any code changes or restarts, making it vastly more efficient.</p>
+                        </div>
+                        <div id="tab-content-security" class="hidden">
+                            <h4 class="text-xl font-bold mb-2">Context-Aware, Kernel-Level Security</h4>
+                            <p><strong>The Challenge:</strong> Security tools need to understand context. Is an IP address making a suspicious call, or is it a specific process in a specific container belonging to a specific service?</p>
+                            <p class="mt-2"><strong>The eBPF Solution:</strong> eBPF can correlate multiple event sources at the kernel level—network packets, system calls, file access—with cloud-native context (pod names, namespaces) stored in eBPF maps. This enables the creation of highly precise, context-aware security policies that are enforced at the earliest possible moment.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section: Case Studies -->
+            <section id="casestudies" class="mb-16">
+                <h2 class="text-4xl font-bold mb-4">Case Studies: eBPF in Action</h2>
+                <p class="text-lg text-gray-700 max-w-4xl mb-8">Leading cloud-native projects have embraced eBPF as their core engine. This section explores the architecture of two CNCF-graduated projects, Cilium and Falco, to show how eBPF is used in the real world. Click the tabs to switch between them and interact with their architectural diagrams.</p>
+                <div class="flex border-b border-gray-300">
+                    <button data-tab="cilium" class="tab-button py-2 px-4 -mb-px rounded-t-md active">Cilium</button>
+                    <button data-tab="falco" class="tab-button py-2 px-4 -mb-px rounded-t-md">Falco</button>
+                </div>
+                <div class="content-card p-6 rounded-lg rounded-tl-none">
+                    <div id="tab-content-cilium">
+                        <h3 class="text-2xl font-bold mb-2">Cilium: High-Performance Networking & Security</h3>
+                        <p class="text-gray-600 mb-6">Cilium uses eBPF to provide a high-performance CNI for Kubernetes. Click on the components in the diagram to learn how it works.</p>
+                        <div class="border border-gray-300 rounded-lg p-4 bg-white/50">
+                            <div class="text-center font-bold mb-2">Kubernetes Node</div>
+                            <div class="flex gap-4">
+                                <!-- User Space -->
+                                <div class="w-1/3 border-r pr-4 border-dashed border-gray-400">
+                                    <h4 class="font-bold text-center mb-2">User Space</h4>
+                                    <div class="diagram-component border rounded p-2 text-center bg-blue-100 border-blue-300" data-info="cilium-agent">Cilium Agent</div>
+                                    <p class="text-xs text-center mt-1">Manages eBPF programs, syncs with K8s API</p>
+                                </div>
+                                <!-- Kernel Space -->
+                                <div class="w-2/3">
+                                    <h4 class="font-bold text-center mb-2">Kernel Space</h4>
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <div class="diagram-component border rounded p-2 text-center bg-green-100 border-green-300 flex-1" data-info="xdp-tc">XDP / TC Hooks</div>
+                                        <div class="text-gray-500">→</div>
+                                        <div class="diagram-component border rounded p-2 text-center bg-yellow-100 border-yellow-300 flex-1" data-info="identity">Identity & Policy Enforcement (eBPF Maps)</div>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <div class="diagram-component border rounded p-2 text-center bg-green-100 border-green-300 flex-1" data-info="socket">Socket Hooks</div>
+                                        <div class="text-gray-500">→</div>
+                                        <div class="diagram-component border rounded p-2 text-center bg-yellow-100 border-yellow-300 flex-1" data-info="kube-proxy">Service Load Balancing (kube-proxy replacement)</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="tab-content-falco" class="hidden">
+                        <h3 class="text-2xl font-bold mb-2">Falco: Real-Time Runtime Security</h3>
+                        <p class="text-gray-600 mb-6">Falco is a runtime security tool that uses eBPF to detect anomalous behavior. Click components to see their role in the event pipeline.</p>
+                        <div class="border border-gray-300 rounded-lg p-4 bg-white/50 flex flex-col items-center">
+                            <div class="diagram-component w-full md:w-3/4 border rounded p-2 text-center bg-red-100 border-red-300 mb-2" data-info="falco-driver">1. eBPF Probe / Kernel Module</div>
+                            <div class="text-2xl text-gray-400">↓</div>
+                             <div class="diagram-component w-full md:w-3/4 border rounded p-2 text-center bg-red-100 border-red-300 mb-2" data-info="falco-libs">2. Libs (libscap, libsinsp)</div>
+                            <div class="text-2xl text-gray-400">↓</div>
+                            <div class="diagram-component w-full md:w-3/4 border rounded p-2 text-center bg-red-100 border-red-300 mb-2" data-info="falco-engine">3. Falco Engine</div>
+                             <div class="text-2xl text-gray-400">↓</div>
+                            <div class="diagram-component w-full md:w-3/4 border rounded p-2 text-center bg-red-100 border-red-300" data-info="falco-outputs">4. Outputs (Alerts)</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- Section: Analysis -->
+            <section id="analysis" class="mb-16">
+                <h2 class="text-4xl font-bold mb-4">Analysis & Future Outlook</h2>
+                <p class="text-lg text-gray-700 max-w-4xl mb-8">eBPF is not without its challenges, such as complexity and kernel version dependencies. However, its advantages and the rapid growth of its ecosystem position it as a dominant technology for the future of programmable infrastructure.</p>
+                 <div class="grid md:grid-cols-2 gap-6">
+                    <div class="content-card p-6 rounded-lg">
+                        <h3 class="text-xl font-bold mb-2 text-[#6B8A9A]">🚀 Future Trajectory</h3>
+                        <ul class="list-disc list-inside space-y-2">
+                           <li><strong>Cross-Platform Expansion:</strong> Microsoft is actively developing eBPF for Windows, signaling a future where eBPF could become a cross-platform standard.</li>
+                           <li><strong>Hardware Offload:</strong> Modern SmartNICs are being built to run eBPF programs directly on the hardware, offloading work from the main CPU.</li>
+                           <li><strong>AI/ML Integration:</strong> The rich data stream from eBPF is a perfect input for AI/ML models to perform predictive analysis and advanced anomaly detection.</li>
+                        </ul>
+                    </div>
+                    <div class="content-card p-6 rounded-lg">
+                        <h3 class="text-xl font-bold mb-2 text-[#6B8A9A]">⚠️ Limitations & Challenges</h3>
+                         <ul class="list-disc list-inside space-y-2">
+                           <li><strong>Complexity:</strong> Writing low-level eBPF C code is challenging, though abstracted by tools like bpftrace and libraries like libbpf.</li>
+                           <li><strong>Kernel Version Dependency:</strong> Advanced eBPF features often require modern Linux kernels, which can be a challenge in heterogeneous environments. The CO-RE (Compile Once - Run Everywhere) initiative helps mitigate this.</li>
+                           <li><strong>The Remediation Gap:</strong> Most eBPF security tools are for detection, not prevention. They can report on a malicious event, but often cannot block it in real-time.</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal for diagram info -->
+    <div id="diagram-modal" class="modal-backdrop">
+        <div class="modal-content content-card p-6 rounded-lg w-11/12 max-w-lg relative">
+            <h3 id="modal-title" class="text-xl font-bold mb-4 text-[#6B8A9A]">Component Info</h3>
+            <p id="modal-text">Details about the selected component.</p>
+            <button id="modal-close" class="absolute top-4 right-4 text-gray-500 hover:text-gray-800 text-2xl font-bold">&times;</button>
+        </div>
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Data for charts and modals
+            const evolutionData = {
+                labels: ['Registers', 'Register Width', 'State Management', 'Function Calls', 'Execution Model'],
+                cBPF: [2, 32, 0, 0, 1],
+                eBPF: [11, 64, 1, 1, 2]
+            };
+            const trilemmaData = {
+                labels: ['🛡️ Safety', '⚡ Performance', '🔧 Programmability'],
+                datasets: [
+                    {
+                        label: 'Kernel Modules',
+                        data: [1, 5, 4.5],
+                        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                        borderColor: 'rgb(239, 68, 68)',
+                        pointBackgroundColor: 'rgb(239, 68, 68)'
+                    },
+                    {
+                        label: 'User-Space Agents',
+                        data: [5, 2, 4],
+                        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                        borderColor: 'rgb(59, 130, 246)',
+                        pointBackgroundColor: 'rgb(59, 130, 246)'
+                    },
+                     {
+                        label: 'eBPF',
+                        data: [4.5, 4.5, 5],
+                        backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                        borderColor: 'rgb(34, 197, 94)',
+                        pointBackgroundColor: 'rgb(34, 197, 94)'
+                    }
+                ]
+            };
+            const modalInfo = {
+                'cilium-agent': { title: 'Cilium Agent', text: 'A privileged daemon that runs on each node. It interacts with the Kubernetes API to understand workload identity, compiles eBPF programs, and manages their lifecycle in the kernel.' },
+                'xdp-tc': { title: 'XDP / TC Hooks', text: 'Cilium attaches eBPF programs to TC (Traffic Control) and XDP (eXpress Data Path) hooks. This allows it to intercept all network traffic at the earliest, most performant points in the kernel networking stack.' },
+                'identity': { title: 'Identity & Policy Enforcement', text: 'Cilium maps ephemeral pod IPs to stable integer-based security identities. eBPF maps are used to store these identities and the network policies associated with them, enabling highly efficient lookups in the kernel to allow/deny traffic.' },
+                'socket': { title: 'Socket Hooks', text: 'By attaching to socket-level hooks (e.g., at the `connect()` syscall), Cilium can intercept traffic before it even becomes a packet on the network.' },
+                'kube-proxy': { title: 'kube-proxy Replacement', text: 'Using socket hooks and eBPF maps, Cilium implements a highly efficient service load balancer. It translates a virtual Service IP to a real backend Pod IP at the start of a connection, avoiding per-packet NAT overhead and replacing the need for kube-proxy.' },
+                'falco-driver': { title: 'eBPF Probe / Kernel Module', text: 'This is the instrumentation layer. The eBPF probe attaches to kernel tracepoints (like `sys_enter`/`sys_exit`) to capture every system call, collecting data like PID, syscall arguments, and timestamps.' },
+                'falco-libs': { title: 'Libraries (libscap, libsinsp)', text: 'The raw event stream from the kernel is read by `libscap`. `libsinsp` then enriches these raw events with high-level context by correlating them with metadata from Kubernetes and container runtimes (e.g., mapping a PID to a pod and container name).' },
+                'falco-engine': { title: 'Falco Engine', text: 'The stream of enriched events is fed into the Falco engine. It evaluates each event against a set of user-defined rules written in YAML to check for suspicious or malicious behavior.' },
+                'falco-outputs': { title: 'Outputs (Alerts)', text: 'If an event matches a rule, the engine generates a security alert. This alert can be sent to various destinations like logs, stdout, or external systems like Slack, PagerDuty, or a SIEM for response.' },
+            };
+
+            // Chart.js: Evolution Chart
+            const evoCtx = document.getElementById('evolutionChart').getContext('2d');
+            new Chart(evoCtx, {
+                type: 'bar',
+                data: {
+                    labels: evolutionData.labels,
+                    datasets: [
+                        {
+                            label: 'cBPF (Classic)',
+                            data: evolutionData.cBPF.map(v => v === 0 ? 0.5 : v),
+                            backgroundColor: '#A0AEC0',
+                        },
+                        {
+                            label: 'eBPF (Extended)',
+                            data: evolutionData.eBPF,
+                            backgroundColor: '#6B8A9A',
+                        }
+                    ]
+                },
+                options: {
+                    maintainAspectRatio: false,
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback: function(value, index, values) {
+                                    if(index === 0) return 'Limited/None';
+                                    if(index === 2) return 'Full/Modern';
+                                    return '';
+                                }
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const label = context.dataset.label || '';
+                                    if(context.parsed.y) {
+                                        const feature = context.label;
+                                        if (feature === 'Registers') return `${label}: ${context.parsed.y} registers`;
+                                        if (feature === 'Register Width') return `${label}: ${context.parsed.y}-bit`;
+                                        if (feature === 'State Management' && label === 'eBPF (Extended)') return `${label}: Stateful via Maps`;
+                                        if (feature === 'Function Calls' && label === 'eBPF (Extended)') return `${label}: Supported`;
+                                        if (feature === 'Execution Model' && label === 'eBPF (Extended)') return `${label}: JIT Compiler`;
+                                        return `${label}: Limited/None`;
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            // Chart.js: Trilemma Chart
+            const trilemmaCtx = document.getElementById('trilemmaChart').getContext('2d');
+            new Chart(trilemmaCtx, {
+                type: 'radar',
+                data: trilemmaData,
+                options: {
+                    maintainAspectRatio: false,
+                    responsive: true,
+                    scales: {
+                        r: {
+                            angleLines: { display: false },
+                            suggestedMin: 0,
+                            suggestedMax: 5,
+                            pointLabels: {
+                                font: {
+                                    size: 14,
+                                    weight: 'bold'
+                                }
+                            }
+                        }
+                    },
+                     plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // Navigation scroll logic
+            const navLinks = document.querySelectorAll('.nav-link');
+            const sections = document.querySelectorAll('section');
+            window.addEventListener('scroll', () => {
+                let current = '';
+                sections.forEach(section => {
+                    const sectionTop = section.offsetTop;
+                    if (pageYOffset >= sectionTop - 60) {
+                        current = section.getAttribute('id');
+                    }
+                });
+                navLinks.forEach(link => {
+                    link.classList.remove('active');
+                    if (link.getAttribute('href').substring(1) === current) {
+                        link.classList.add('active');
+                    }
+                });
+            });
+
+            // Tab switching logic
+            const tabButtons = document.querySelectorAll('.tab-button');
+            tabButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const tabName = button.dataset.tab;
+                    const tabContainer = button.parentElement.nextElementSibling;
+                    
+                    // Deactivate sibling buttons and hide sibling content
+                    button.parentElement.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+                    tabContainer.querySelectorAll('[id^="tab-content-"]').forEach(content => content.classList.add('hidden'));
+
+                    // Activate clicked button and show its content
+                    button.classList.add('active');
+                    document.getElementById(`tab-content-${tabName}`).classList.remove('hidden');
+                });
+            });
+            
+            // Lifecycle diagram interaction
+            const stages = document.querySelectorAll('.lifecycle-stage');
+            stages.forEach(stage => {
+                stage.addEventListener('click', () => {
+                    const stageNum = stage.id.split('-')[1];
+                    const textEl = document.getElementById(`text-${stageNum}`);
+                    
+                    document.querySelectorAll('.lifecycle-stage, .lifecycle-text').forEach(el => el.classList.remove('highlight'));
+                    
+                    stage.classList.add('highlight');
+                    textEl.classList.add('highlight');
+                    textEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            });
+
+            // Diagram modal interaction
+            const modal = document.getElementById('diagram-modal');
+            const modalTitle = document.getElementById('modal-title');
+            const modalText = document.getElementById('modal-text');
+            const modalClose = document.getElementById('modal-close');
+            document.querySelectorAll('.diagram-component').forEach(component => {
+                component.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const infoKey = component.dataset.info;
+                    if(modalInfo[infoKey]) {
+                        modalTitle.textContent = modalInfo[infoKey].title;
+                        modalText.textContent = modalInfo[infoKey].text;
+                        modal.classList.add('visible');
+                    }
+                });
+            });
+            const closeModal = () => modal.classList.remove('visible');
+            modalClose.addEventListener('click', closeModal);
+            modal.addEventListener('click', (e) => {
+                if(e.target === modal) closeModal();
+            });
+
+        });
+    </script>
+</body>
+</html>
